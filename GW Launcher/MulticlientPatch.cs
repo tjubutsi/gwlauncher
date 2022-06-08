@@ -22,7 +22,7 @@ internal class MulticlientPatch
 
         PEB peb = new()
         {
-            ImageBaseAddress = (IntPtr) BitConverter.ToInt32(buffer, 8)
+            ImageBaseAddress = (IntPtr)BitConverter.ToInt32(buffer, 8)
         };
 
         return peb.ImageBaseAddress + 0x1000;
@@ -37,30 +37,14 @@ internal class MulticlientPatch
             character = account.character;
         }
 
+        uModTexClient? texClient = null;
+
         if (ModManager.GetTexmods(account.gwpath, account.mods).Any())
         {
+            texClient = new uModTexClient();
             Task.Run(() =>
             {
-                using var texClient = new uModTexClient();
-                while (!texClient.IsReady() && !Program.shouldClose)
-                {
-                    Thread.Sleep(200);
-                }
 
-                foreach (var tex in ModManager.GetTexmods(path, account.mods))
-                {
-                    if (Program.shouldClose)
-                    {
-                        texClient.Dispose();
-                        return;
-                    }
-
-                    texClient.AddFile(tex);
-                }
-
-                texClient.Send();
-
-                GC.Collect(2, GCCollectionMode.Optimized); // force garbage collection
             });
         }
 
@@ -81,9 +65,9 @@ internal class MulticlientPatch
         var memory = new GWCAMemory(process);
 
         // make sure umod d3d9.dll is loaded BEFORE the game loads the original d3d9.dll
-        foreach (var dll in ModManager.GetPreloadDlls(path, account.mods))
+        foreach (var dll in ModManager.GetDlls(path, account.mods))
         {
-            memory.LoadModule(dll, false);
+            memory.LoadModule(dll);
         }
 
         if (hThread != IntPtr.Zero)
@@ -92,9 +76,30 @@ internal class MulticlientPatch
             WinApi.CloseHandle(hThread);
         }
 
-        foreach (var dll in ModManager.GetDlls(path, account.mods))
+        if (texClient != null)
         {
-            memory.LoadModule(dll);
+            Task.Run(() =>
+            {
+                var timeout = 0;
+                while (!texClient.IsReady() && !Program.shouldClose && timeout++ < 50)
+                {
+                    Thread.Sleep(200);
+                }
+
+                foreach (var tex in ModManager.GetTexmods(path, account.mods))
+                {
+                    if (Program.shouldClose || timeout >= 50)
+                    {
+                        texClient.Dispose();
+                    }
+
+                    texClient.AddFile(tex);
+                }
+
+                texClient.Send();
+
+                GC.Collect(2, GCCollectionMode.Optimized); // force garbage collection
+            });
         }
 
         return memory;
@@ -125,14 +130,14 @@ internal class MulticlientPatch
         try
         {
             var regSrc = Registry.GetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\ArenaNet\\Guild Wars", "Src", null);
-            if (regSrc != null && (string) regSrc != Path.GetFullPath(path))
+            if (regSrc != null && (string)regSrc != Path.GetFullPath(path))
             {
                 Registry.SetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\ArenaNet\\Guild Wars", "Src", Path.GetFullPath(path));
                 Registry.SetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\ArenaNet\\Guild Wars", "Path", Path.GetFullPath(path));
             }
 
             regSrc = Registry.GetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\Wow6432Node\\ArenaNet\\Guild Wars", "Src", null);
-            if (regSrc == null || (string) regSrc == Path.GetFullPath(path))
+            if (regSrc == null || (string)regSrc == Path.GetFullPath(path))
             {
                 return;
             }
@@ -197,7 +202,7 @@ internal class MulticlientPatch
 
         var mcpatch = moduleBase + idx - 0x1A;
 
-        byte[] payload = {0x31, 0xC0, 0x90, 0xC3};
+        byte[] payload = { 0x31, 0xC0, 0x90, 0xC3 };
 
         return WinApi.WriteProcessMemory(processHandle, mcpatch, payload, payload.Length, out _);
     }
@@ -213,9 +218,9 @@ internal class MulticlientPatch
             cb = Marshal.SizeOf(typeof(STARTUPINFO))
         };
         var saProcess = new SECURITY_ATTRIBUTES();
-        saProcess.nLength = (uint) Marshal.SizeOf(saProcess);
+        saProcess.nLength = (uint)Marshal.SizeOf(saProcess);
         var saThread = new SECURITY_ATTRIBUTES();
-        saThread.nLength = (uint) Marshal.SizeOf(saThread);
+        saThread.nLength = (uint)Marshal.SizeOf(saThread);
 
         var lastDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(Path.GetDirectoryName(path)!);
@@ -248,7 +253,7 @@ internal class MulticlientPatch
             }
 
             if (!WinSafer.SetTokenInformation(hRestrictedToken, TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, ref tml,
-                    (uint) Marshal.SizeOf(tml) + WinSafer.GetLengthSid(tml.Label.Sid)))
+                    (uint)Marshal.SizeOf(tml) + WinSafer.GetLengthSid(tml.Label.Sid)))
             {
                 WinApi.LocalFree(tml.Label.Sid);
                 WinApi.CloseHandle(hRestrictedToken);
@@ -256,7 +261,7 @@ internal class MulticlientPatch
             }
 
             if (!WinSafer.CreateProcessAsUser(hRestrictedToken, null!, commandLine, ref saProcess,
-                    ref saProcess, false, (uint) CreationFlags.CreateSuspended, IntPtr.Zero,
+                    ref saProcess, false, (uint)CreationFlags.CreateSuspended, IntPtr.Zero,
                     null!, ref startinfo, out procinfo))
             {
                 var error = Marshal.GetLastWin32Error();
@@ -270,7 +275,7 @@ internal class MulticlientPatch
         else
         {
             if (!WinApi.CreateProcess(null!, commandLine, ref saProcess,
-                    ref saThread, false, (uint) CreationFlags.CreateSuspended, IntPtr.Zero,
+                    ref saThread, false, (uint)CreationFlags.CreateSuspended, IntPtr.Zero,
                     null!, ref startinfo, out procinfo))
             {
                 var error = Marshal.GetLastWin32Error();
